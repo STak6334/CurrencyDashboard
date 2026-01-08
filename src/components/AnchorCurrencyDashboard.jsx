@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
     Globe,
     TrendingUp,
@@ -91,11 +91,10 @@ const SectionHeader = ({ title, subtitle }) => (
 const TabButton = ({ active, icon: Icon, label, sublabel, onClick }) => (
     <button
         onClick={onClick}
-        className={`flex-1 p-4 rounded-lg border transition-all duration-300 ${
-            active
-                ? 'bg-amber-500/20 border-amber-500/50 text-amber-400'
-                : 'bg-slate-800/50 border-slate-700 text-slate-400 hover:border-slate-600'
-        }`}
+        className={`flex-1 p-4 rounded-lg border transition-all duration-300 ${active
+            ? 'bg-amber-500/20 border-amber-500/50 text-amber-400'
+            : 'bg-slate-800/50 border-slate-700 text-slate-400 hover:border-slate-600'
+            }`}
     >
         <div className="flex items-center justify-center gap-2 mb-1">
             <Icon className="w-5 h-5" />
@@ -338,23 +337,51 @@ const ValueStorageContent = () => (
 );
 
 // 환율 변화 추이 차트
+// 환율 변화 추이 차트 (실시간)
 const ExchangeRateChart = ({ fedRate }) => {
-    // Fed 금리에 따른 현재 환율 추정
-    const currentRate = useMemo(() => {
-        const baseRate = 1340;
-        const adjustment = (fedRate - 3) * 30;
-        return Math.round(baseRate + adjustment);
+    const [liveRate, setLiveRate] = useState(1380);
+
+    // 실시간 환율 변동 효과
+    useEffect(() => {
+        const interval = setInterval(() => {
+            setLiveRate(prev => {
+                // Fed 금리에 따른 매수/매도 압력 시뮬레이션
+                // 금리 3% 기준: 높으면 상승 압력, 낮으면 하락 압력
+                const pressure = (fedRate - 3.0) * 0.2;
+                const noise = (Math.random() - 0.5) * 5; // 랜덤 등락폭
+
+                let nextRate = prev + pressure + noise;
+
+                // 범위 제한 (현실적인 범위 1100 ~ 1600 사이에서 움직이도록 하되 탄력적으로)
+                // 중앙값(1350)으로 돌아오려는 복원력 약간 추가
+                nextRate += (1350 - nextRate) * 0.01;
+
+                return Number(nextRate.toFixed(1));
+            });
+        }, 800); // 0.8초마다 갱신
+
+        return () => clearInterval(interval);
     }, [fedRate]);
 
     const chartData = useMemo(() => {
-        return [...EXCHANGE_RATE_DATA, { year: '현재', rate: currentRate }];
-    }, [currentRate]);
+        // 기존 연도별 데이터 + 실시간 현재 데이터
+        return [
+            ...EXCHANGE_RATE_DATA,
+            { year: '현재', rate: Math.round(liveRate) }
+        ];
+    }, [liveRate]);
 
     return (
         <div className="bg-slate-800/50 p-6 rounded-xl border border-slate-700">
-            <div className="flex items-center gap-2 mb-6">
-                <TrendingUp className="w-5 h-5 text-blue-400" />
-                <h3 className="text-lg font-semibold text-white">환율 변화 추이 (원/달러)</h3>
+            <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-2">
+                    <TrendingUp className="w-5 h-5 text-blue-400" />
+                    <h3 className="text-lg font-semibold text-white">환율 변화 추이 (원/달러)</h3>
+                </div>
+                <div className="flex items-center gap-2 px-3 py-1 bg-green-500/10 border border-green-500/20 rounded-full animate-pulse">
+                    <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                    <span className="text-xs font-bold text-green-400">LIVE: ₩{Math.round(liveRate).toLocaleString()}</span>
+                </div>
             </div>
             <div className="h-[200px] w-full">
                 <ResponsiveContainer width="100%" height="100%">
@@ -364,19 +391,33 @@ const ExchangeRateChart = ({ fedRate }) => {
                         <YAxis
                             stroke="#64748b"
                             tick={{ fill: '#64748b', fontSize: 12 }}
-                            domain={[1000, 1500]}
+                            domain={['dataMin - 50', 'dataMax + 50']}
                         />
                         <Tooltip
                             contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', color: '#f1f5f9' }}
                             formatter={(value) => [`₩${value.toLocaleString()}`, '환율']}
+                            labelStyle={{ color: '#94a3b8' }}
                         />
                         <Line
                             type="monotone"
                             dataKey="rate"
                             stroke="#3b82f6"
-                            strokeWidth={2}
-                            dot={{ fill: '#3b82f6', strokeWidth: 2 }}
-                            activeDot={{ r: 6, fill: '#60a5fa' }}
+                            strokeWidth={3}
+                            dot={(props) => {
+                                // 마지막 점(현재)만 강조
+                                const { cx, cy, index, payload } = props;
+                                if (payload.year === '현재') {
+                                    return (
+                                        <g key={index}>
+                                            <circle cx={cx} cy={cy} r={6} fill="#3b82f6" stroke="#fff" strokeWidth={2} />
+                                            <circle cx={cx} cy={cy} r={10} fill="#3b82f6" opacity={0.3} className="animate-ping" />
+                                        </g>
+                                    );
+                                }
+                                return <circle cx={cx} cy={cy} r={4} fill="#3b82f6" key={index} />;
+                            }}
+                            activeDot={{ r: 8, fill: '#60a5fa' }}
+                            isAnimationActive={false} // 실시간 업데이트 시 깜빡임 방지
                         />
                     </LineChart>
                 </ResponsiveContainer>
