@@ -338,89 +338,221 @@ const ValueStorageContent = () => (
 
 // 환율 변화 추이 차트
 // 환율 변화 추이 차트 (실시간)
+// 기간별 더미 데이터 생성기
+const generateData = (period, currentRate) => {
+    const data = [];
+    let points = 0;
+    let volatility = 0;
+    let labelFormat = '';
+
+    switch (period) {
+        case '1D':
+            points = 24; // 시간별
+            volatility = 2;
+            labelFormat = 'time';
+            break;
+        case '1M':
+            points = 30; // 일별
+            volatility = 15;
+            labelFormat = 'day';
+            break;
+        case '1Y':
+            points = 12; // 월별
+            volatility = 50;
+            labelFormat = 'month';
+            break;
+        case '5Y':
+            points = 60; // 월별
+            volatility = 150;
+            labelFormat = 'year';
+            break;
+        case 'Max':
+            points = 100;
+            volatility = 300;
+            labelFormat = 'year';
+            break;
+        default:
+            points = 30;
+            volatility = 10;
+    }
+
+    let rate = currentRate;
+    const now = new Date();
+
+    for (let i = points; i >= 0; i--) {
+        // 랜덤 워크 시뮬레이션
+        const change = (Math.random() - 0.5) * volatility;
+        rate += change;
+
+        // 날짜 라벨 생성
+        let label = '';
+        const d = new Date(now);
+
+        if (period === '1D') {
+            d.setHours(d.getHours() - i);
+            label = `${d.getHours()}:00`;
+        } else if (period === '1M') {
+            d.setDate(d.getDate() - i);
+            label = `${d.getMonth() + 1}/${d.getDate()}`;
+        } else if (period === '1Y') {
+            d.setMonth(d.getMonth() - i);
+            label = `${d.getFullYear()}.${d.getMonth() + 1}`;
+        } else {
+            d.setMonth(d.getMonth() - i);
+            label = `${d.getFullYear()}`;
+        }
+
+        data.push({
+            date: label,
+            rate: Number(rate.toFixed(2))
+        });
+    }
+    return data;
+};
+
+// 환율 변화 추이 차트 및 계산기
 const ExchangeRateChart = ({ fedRate }) => {
-    const [liveRate, setLiveRate] = useState(1380);
+    const [period, setPeriod] = useState('1Y');
+    const [usdAmount, setUsdAmount] = useState(1);
+    const [krwAmount, setKrwAmount] = useState(1380);
+    const [chartData, setChartData] = useState([]);
+    const [currentRate, setCurrentRate] = useState(1380);
 
-    // 실시간 환율 변동 효과
+    // Fed 금리 변경 시 기준 환율 업데이트
     useEffect(() => {
-        const interval = setInterval(() => {
-            setLiveRate(prev => {
-                // Fed 금리에 따른 매수/매도 압력 시뮬레이션
-                // 금리 3% 기준: 높으면 상승 압력, 낮으면 하락 압력
-                const pressure = (fedRate - 3.0) * 0.2;
-                const noise = (Math.random() - 0.5) * 5; // 랜덤 등락폭
-
-                let nextRate = prev + pressure + noise;
-
-                // 범위 제한 (현실적인 범위 1100 ~ 1600 사이에서 움직이도록 하되 탄력적으로)
-                // 중앙값(1350)으로 돌아오려는 복원력 약간 추가
-                nextRate += (1350 - nextRate) * 0.01;
-
-                return Number(nextRate.toFixed(1));
-            });
-        }, 800); // 0.8초마다 갱신
-
-        return () => clearInterval(interval);
+        const baseRate = 1340 + (fedRate - 3) * 30;
+        setCurrentRate(baseRate);
+        setKrwAmount(Math.round(usdAmount * baseRate));
     }, [fedRate]);
 
-    const chartData = useMemo(() => {
-        // 기존 연도별 데이터 + 실시간 현재 데이터
-        return [
-            ...EXCHANGE_RATE_DATA,
-            { year: '현재', rate: Math.round(liveRate) }
-        ];
-    }, [liveRate]);
+    // 기간 변경 시 데이터 재생성
+    useEffect(() => {
+        const newData = generateData(period, currentRate);
+        setChartData(newData);
+    }, [period, currentRate]);
+
+    // 환율 계산 핸들러
+    const handleUsdChange = (e) => {
+        const val = e.target.value;
+        setUsdAmount(val);
+        setKrwAmount(Math.round(val * currentRate));
+    };
+
+    const handleKrwChange = (e) => {
+        const val = e.target.value;
+        setKrwAmount(val);
+        setUsdAmount((val / currentRate).toFixed(2));
+    };
 
     return (
         <div className="bg-slate-800/50 p-6 rounded-xl border border-slate-700">
-            <div className="flex items-center justify-between mb-6">
+            {/* 상단 헤더 & 환율 계산기 */}
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-8">
                 <div className="flex items-center gap-2">
-                    <TrendingUp className="w-5 h-5 text-blue-400" />
-                    <h3 className="text-lg font-semibold text-white">환율 변화 추이 (원/달러)</h3>
+                    <TrendingUp className="w-6 h-6 text-green-400" />
+                    <div>
+                        <h3 className="text-xl font-bold text-white">USD/KRW 환율</h3>
+                        <p className="text-sm text-slate-400">실시간 환율 변동 및 계산</p>
+                    </div>
                 </div>
-                <div className="flex items-center gap-2 px-3 py-1 bg-green-500/10 border border-green-500/20 rounded-full animate-pulse">
-                    <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                    <span className="text-xs font-bold text-green-400">LIVE: ₩{Math.round(liveRate).toLocaleString()}</span>
+
+                {/* 환율 계산기 UI */}
+                <div className="flex items-center gap-3 bg-slate-900/80 p-3 rounded-lg border border-slate-700">
+                    <div className="relative group">
+                        <label className="absolute -top-2 left-2 text-[10px] text-slate-400 bg-slate-900 px-1 group-focus-within:text-blue-400">USD</label>
+                        <input
+                            type="number"
+                            value={usdAmount}
+                            onChange={handleUsdChange}
+                            className="w-24 bg-transparent border border-slate-600 rounded px-3 py-1.5 text-right text-white focus:outline-none focus:border-blue-500 transition-colors"
+                        />
+                    </div>
+                    <ArrowRightLeft className="w-4 h-4 text-slate-500" />
+                    <div className="relative group">
+                        <label className="absolute -top-2 left-2 text-[10px] text-slate-400 bg-slate-900 px-1 group-focus-within:text-blue-400">KRW</label>
+                        <input
+                            type="number"
+                            value={krwAmount}
+                            onChange={handleKrwChange}
+                            className="w-32 bg-transparent border border-slate-600 rounded px-3 py-1.5 text-right text-white focus:outline-none focus:border-blue-500 transition-colors"
+                        />
+                    </div>
                 </div>
             </div>
-            <div className="h-[200px] w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={chartData}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                        <XAxis dataKey="year" stroke="#64748b" tick={{ fill: '#64748b', fontSize: 12 }} />
-                        <YAxis
-                            stroke="#64748b"
-                            tick={{ fill: '#64748b', fontSize: 12 }}
-                            domain={['dataMin - 50', 'dataMax + 50']}
-                        />
-                        <Tooltip
-                            contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', color: '#f1f5f9' }}
-                            formatter={(value) => [`₩${value.toLocaleString()}`, '환율']}
-                            labelStyle={{ color: '#94a3b8' }}
-                        />
-                        <Line
-                            type="monotone"
-                            dataKey="rate"
-                            stroke="#3b82f6"
-                            strokeWidth={3}
-                            dot={(props) => {
-                                // 마지막 점(현재)만 강조
-                                const { cx, cy, index, payload } = props;
-                                if (payload.year === '현재') {
-                                    return (
-                                        <g key={index}>
-                                            <circle cx={cx} cy={cy} r={6} fill="#3b82f6" stroke="#fff" strokeWidth={2} />
-                                            <circle cx={cx} cy={cy} r={10} fill="#3b82f6" opacity={0.3} className="animate-ping" />
-                                        </g>
-                                    );
-                                }
-                                return <circle cx={cx} cy={cy} r={4} fill="#3b82f6" key={index} />;
-                            }}
-                            activeDot={{ r: 8, fill: '#60a5fa' }}
-                            isAnimationActive={false} // 실시간 업데이트 시 깜빡임 방지
-                        />
-                    </LineChart>
-                </ResponsiveContainer>
+
+            {/* 메인 차트 영역 */}
+            <div className="mb-4">
+                <div className="flex justify-between items-end mb-4">
+                    <div>
+                        <span className="text-3xl font-bold text-white">
+                            {Number(currentRate).toLocaleString(undefined, { maximumFractionDigits: 1 })}
+                        </span>
+                        <span className="text-sm text-slate-400 ml-2">KRW</span>
+                        <div className={`text-sm ${currentRate >= 1340 ? 'text-green-400' : 'text-red-400'} flex items-center gap-1 mt-1`}>
+                            {currentRate >= 1340 ? '+' : ''}{(currentRate - 1340).toFixed(1)} ({((currentRate - 1340) / 1340 * 100).toFixed(2)}%)
+                            <span className="text-slate-500 text-xs ml-1">vs 전일</span>
+                        </div>
+                    </div>
+
+                    {/* 기간 선택 탭 */}
+                    <div className="flex bg-slate-700/50 p-1 rounded-lg">
+                        {['1D', '1M', '1Y', '5Y', 'Max'].map((p) => (
+                            <button
+                                key={p}
+                                onClick={() => setPeriod(p)}
+                                className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${period === p
+                                        ? 'bg-slate-600 text-white shadow-sm'
+                                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700'
+                                    }`}
+                            >
+                                {p}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
+                <div className="h-[250px] w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={chartData}>
+                            <defs>
+                                <linearGradient id="colorRate" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
+                                    <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                                </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                            <XAxis
+                                dataKey="date"
+                                stroke="#64748b"
+                                tick={{ fill: '#64748b', fontSize: 11 }}
+                                tickLine={false}
+                                axisLine={false}
+                                minTickGap={30}
+                            />
+                            <YAxis
+                                domain={['auto', 'auto']}
+                                stroke="#64748b"
+                                tick={{ fill: '#64748b', fontSize: 11 }}
+                                tickLine={false}
+                                axisLine={false}
+                                width={40}
+                            />
+                            <Tooltip
+                                contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', color: '#f1f5f9' }}
+                                formatter={(value) => [`₩${value.toLocaleString()}`, '환율']}
+                                labelStyle={{ color: '#94a3b8' }}
+                            />
+                            <Area
+                                type="monotone"
+                                dataKey="rate"
+                                stroke="#10b981"
+                                strokeWidth={2}
+                                fillOpacity={1}
+                                fill="url(#colorRate)"
+                            />
+                        </AreaChart>
+                    </ResponsiveContainer>
+                </div>
             </div>
         </div>
     );
