@@ -13,7 +13,8 @@ function App() {
     useEffect(() => {
         const fetchHealth = async () => {
             try {
-                const response = await fetch('http://localhost:8787/api/health')
+                const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8787'
+                const response = await fetch(`${apiUrl}/api/health`)
                 if (response.ok) {
                     const data = await response.json()
                     setHealthStatus(data.status)
@@ -33,7 +34,8 @@ function App() {
     // Fetch stats when requested
     const handleViewStats = async () => {
         try {
-            const response = await fetch('http://localhost:8787/api/stats')
+            const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8787'
+            const response = await fetch(`${apiUrl}/api/stats`)
             if (response.ok) {
                 const data = await response.json()
                 setStats(data)
