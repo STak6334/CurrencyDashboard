@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
+import { v4 as uuidv4 } from 'crypto';
 
 // ==================== ENV CONFIGURATION ====================
 const envPath = '.env';
@@ -399,101 +400,33 @@ const server = createServer(async (req, res) => {
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET,POST,OPTIONS,DELETE,PUT',
-      'Access-Control-Allow-Headers': 'Content-Type,X-Client-Id',
-      'X-App-Version': APP_VERSION
+      'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type'
     });
     res.end();
     return;
   }
 
-  const requestId = generateRequestId();
-  const startTime = Date.now();
   const clientId = getClientId(req);
+  logger.info('Request received', { method: req.method, url: req.url, clientId });
 
-  logger.info('Request received', { method: req.method, url: req.url, clientId, requestId });
+  // Health check endpoint
+  if (req.url === '/api/health' && req.method === 'GET') {
+    sendJson(res, 200, { 
+      ok: true,
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime()
+    });
+    return;
+  }
 
-  try {
-    // ============ HEALTH ENDPOINTS ============
-
-    // GET /api/health - Full health check (detailed)
-    if (req.url === '/api/health' && req.method === 'GET') {
-      const healthStatus = await healthChecker.getHealthStatus();
-      const duration = Date.now() - startTime;
-      const statusCode = healthStatus.status === 'healthy' ? 200 : 
-                        healthStatus.status === 'degraded' ? 206 : 503;
-      sendJson(res, statusCode, healthStatus, requestId, false, duration);
-      metricsCollector.recordRequest(req.method, req.url, statusCode, duration);
-      return;
-    }
-
-    // GET /api/health/live - Liveness probe (fast, simple)
-    if (req.url === '/api/health/live' && req.method === 'GET') {
-      const duration = Date.now() - startTime;
-      sendJson(res, 200, { status: 'alive', timestamp: new Date().toISOString() }, requestId, false, duration);
-      metricsCollector.recordRequest(req.method, req.url, 200, duration);
-      return;
-    }
-
-    // GET /api/health/ready - Readiness probe (checks dependencies)
-    if (req.url === '/api/health/ready' && req.method === 'GET') {
-      const stats = metricsCollector.getStats();
-      const hasErrors = stats.errors_total > 5;
-      const statusCode = hasErrors ? 503 : 200;
-      const duration = Date.now() - startTime;
-      sendJson(res, statusCode, { 
-        status: hasErrors ? 'not_ready' : 'ready',
-        dependencies: {
-          cache: 'ready',
-          memory: 'ready',
-          recent_errors: stats.errors_total
-        },
-        timestamp: new Date().toISOString()
-      }, requestId, false, duration);
-      metricsCollector.recordRequest(req.method, req.url, statusCode, duration);
-      return;
-    }
-
-    // GET /api/health/deep - Deep health check
-    if (req.url === '/api/health/deep' && req.method === 'GET') {
-      const healthStatus = await healthChecker.getHealthStatus();
-      const stats = metricsCollector.getStats();
-      const duration = Date.now() - startTime;
-      const statusCode = healthStatus.status === 'healthy' ? 200 : 
-                        healthStatus.status === 'degraded' ? 206 : 503;
-      
-      const deepHealth = {
-        ...healthStatus,
-        metrics: stats,
-        duration_ms: duration
-      };
-
-      sendJson(res, statusCode, deepHealth, requestId, false, duration);
-      metricsCollector.recordRequest(req.method, req.url, statusCode, duration);
-      return;
-    }
-
-    // ============ STATS ENDPOINTS ============
-
-    // GET /api/stats - Request statistics
-    if (req.url === '/api/stats' && req.method === 'GET') {
-      const stats = metricsCollector.getStats();
-      const duration = Date.now() - startTime;
-      sendJson(res, 200, stats, requestId, false, duration);
-      metricsCollector.recordRequest(req.method, req.url, 200, duration);
-      return;
-    }
-
-    // ============ ANALYSIS ENDPOINTS ============
-
-    // POST /api/analysis - AI market analysis
-    if (req.url === '/api/analysis' && req.method === 'POST') {
+  // Analysis endpoint with OpenAI integration
+  if (req.url === '/api/analysis' && req.method === 'POST') {
+    try {
       // Rate limiting check
       if (!rateLimiter.isAllowed(clientId)) {
         logger.warn('Rate limit exceeded', { clientId });
-        const duration = Date.now() - startTime;
-        sendJson(res, 429, { error: '요청 수 제한을 초과했습니다. 잠시 후 다시 시도하세요.' }, requestId, false, duration);
-        metricsCollector.recordRequest(req.method, req.url, 429, duration);
+        sendJson(res, 429, { error: '요청 수 제한을 초과했습니다. 잠시 후 다시 시도하세요.' });
         return;
       }
 
@@ -505,9 +438,7 @@ const server = createServer(async (req, res) => {
       const validation = validateAnalysisInput({ fedRate, exchangeRate, stockKrw, goldKrw, bond });
       if (!validation.valid) {
         logger.warn('Invalid input', { clientId, error: validation.error });
-        const duration = Date.now() - startTime;
-        sendJson(res, 400, { error: validation.error }, requestId, false, duration);
-        metricsCollector.recordRequest(req.method, req.url, 400, duration);
+        sendJson(res, 400, { error: validation.error });
         return;
       }
 
@@ -515,23 +446,15 @@ const server = createServer(async (req, res) => {
       const cacheKey = { fedRate, exchangeRate, stockKrw, goldKrw, bond };
       const cachedAnalysis = responseCache.get(cacheKey);
       if (cachedAnalysis) {
-        logger.info('Returning cached analysis', { clientId, requestId });
-        const duration = Date.now() - startTime;
-        sendJson(res, 200, { 
-          analysis: cachedAnalysis, 
-          cached: true,
-          duration_ms: duration 
-        }, requestId, true, duration);
-        metricsCollector.recordRequest(req.method, req.url, 200, duration, true);
+        logger.info('Returning cached analysis', { clientId });
+        sendJson(res, 200, { analysis: cachedAnalysis, cached: true });
         return;
       }
 
       // Check OpenAI API key
       if (!process.env.OPENAI_API_KEY) {
         logger.error('OpenAI API key not configured');
-        const duration = Date.now() - startTime;
-        sendJson(res, 500, { error: 'OPENAI_API_KEY가 설정되지 않았습니다.' }, requestId, false, duration);
-        metricsCollector.recordRequest(req.method, req.url, 500, duration);
+        sendJson(res, 500, { error: 'OPENAI_API_KEY가 설정되지 않았습니다.' });
         return;
       }
 
@@ -539,63 +462,43 @@ const server = createServer(async (req, res) => {
       const model = process.env.OPENAI_MODEL || 'gpt-3.5-turbo';
       const client = new OpenAIClient(process.env.OPENAI_API_KEY, model);
       
-      logger.info('Calling OpenAI API', { clientId, model, requestId });
-      const aiStartTime = Date.now();
+      logger.info('Calling OpenAI API', { clientId, model });
       const analysis = await client.analyzeMarket(fedRate, exchangeRate, stockKrw, goldKrw, bond);
-      const aiDuration = Date.now() - aiStartTime;
 
       if (!analysis) {
-        logger.error('Empty response from OpenAI', { clientId, requestId });
-        const duration = Date.now() - startTime;
-        sendJson(res, 500, { error: '분석 결과를 생성하지 못했습니다.' }, requestId, false, duration);
-        metricsCollector.recordRequest(req.method, req.url, 500, duration);
+        logger.error('Empty response from OpenAI', { clientId });
+        sendJson(res, 500, { error: '분석 결과를 생성하지 못했습니다.' });
         return;
       }
 
       // Cache the result
       responseCache.set(cacheKey, analysis);
 
-      logger.info('Analysis completed successfully', { clientId, requestId, aiDuration });
-      const duration = Date.now() - startTime;
-      sendJson(res, 200, { 
-        analysis, 
-        cached: false,
-        duration_ms: duration,
-        ai_duration_ms: aiDuration,
-        confidence_score: 0.85
-      }, requestId, false, duration);
-      metricsCollector.recordRequest(req.method, req.url, 200, duration);
+      logger.info('Analysis completed successfully', { clientId });
+      sendJson(res, 200, { analysis, cached: false });
+      return;
+    } catch (error) {
+      logger.error('Analysis request failed', { clientId, error: error.message });
+      const statusCode = error.message.includes('timeout') ? 504 : 500;
+      sendJson(res, statusCode, { 
+        error: '분석 중 오류가 발생했습니다.',
+        detail: error.message
+      });
       return;
     }
-
-    // GET /api/analysis/status - Last analysis status
-    if (req.url === '/api/analysis/status' && req.method === 'GET') {
-      const duration = Date.now() - startTime;
-      const cacheSize = responseCache.cache.size;
-      sendJson(res, 200, {
-        cached_analyses: cacheSize,
-        cache_enabled: true,
-        ttl_seconds: 1800,
-        timestamp: new Date().toISOString()
-      }, requestId, false, duration);
-      metricsCollector.recordRequest(req.method, req.url, 200, duration);
-      return;
-    }
-
-    // Not found
-    const notFoundDuration = Date.now() - startTime;
-    sendJson(res, 404, { error: 'Not found', path: req.url }, requestId, false, notFoundDuration);
-    metricsCollector.recordRequest(req.method, req.url, 404, notFoundDuration);
-
-  } catch (error) {
-    logger.error('Unhandled error', { clientId, requestId, error: error.message });
-    const duration = Date.now() - startTime;
-    sendJson(res, 500, { 
-      error: '서버 오류가 발생했습니다.',
-      requestId 
-    }, requestId, false, duration);
-    metricsCollector.recordRequest('UNKNOWN', req.url, 500, duration);
   }
+
+  // Cache statistics endpoint
+  if (req.url === '/api/stats' && req.method === 'GET') {
+    sendJson(res, 200, { 
+      cacheSize: responseCache.cache.size,
+      uptime: process.uptime()
+    });
+    return;
+  }
+
+  // Not found
+  sendJson(res, 404, { error: 'Not found' });
 });
 
 server.listen(port, () => {
